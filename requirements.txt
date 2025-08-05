@@ -1,0 +1,10 @@
+opencv-python
+numpy
+requests
+mediapipe
+ultralytics
+Pillow
+torch
+torchvision
+protobuf
+streamlit

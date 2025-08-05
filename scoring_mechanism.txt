@@ -1,0 +1,46 @@
+HR Copilot - Scoring Mechanism (Red-Amber-Green Cards)
+
+🟢 Green Card - Ideal Interview Conditions
+All criteria must be met:
+- Exactly 1 person present
+- Same person as registered profile
+- Face centered at screen/camera
+- No distracting gadgets or materials detected
+- Face clearly visible and well-lit
+- Live image (not static/fake)
+
+🟡 Amber Card - Minor Issues
+One or more of these conditions:
+- Looking away (head pose slightly off) for > 15 sec continuously
+- 1-2 non-critical objects detected (laptop, keyboard - normal work setup) -> give alerts to put them away
+- Face partially obscured but still identifiable
+- Moderate lighting or image quality issues
+
+Score: -20 for one amber card
+- Continue interview with monitoring alerts
+- 3 amber cards = 1 Red 
+- Suppose 1 amber card is issued -> strict monitoring for the next 5 minutes and if another violation 
+  is detected within these 5 minutes -> issue a red card directly otherwise continue
+- Amber cards expire after 5 minutes of good behavior
+
+🔴 Red Card - Major Violations
+Any one of these triggers immediate red card:
+- More than 1 person detected
+- Different person than registered
+- Phone, second screen, or printed materials detected
+- Not looking at screen for extended periods
+- Static/fake image detected
+- Face not visible or undetectable
+
+Score: -50 for one red card
+- Interview integrity compromised - immediate action required
+- List violations and terminate/reschedule
+- No appeals or second chances during the same session
+
+Escalation Timeline
+First 2 Minutes (Grace Period)
+- Extra lenient - major violations trigger alerts
+- Focus on helping candidate settle in
+
+Minutes 3-30 (Active Monitoring)
+- Standard rules apply
