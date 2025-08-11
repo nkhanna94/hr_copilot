@@ -1,10 +1,11 @@
+
+from face_verifier import verify_faces
 import cv2
 import numpy as np
 import requests
 import json
 import mediapipe as mp
 from ultralytics import YOLO
-from deepface import DeepFace
 import math
 from typing import Optional, Dict, Tuple, List
 import warnings
@@ -29,8 +30,8 @@ class ProctoringAnalyzer:
         
         self.cosine_threshold = 0.4
         self.gaze_tolerance = 0.15
-        self.yaw_max_deg = 20.0
-        self.pitch_max_deg = 25.0
+        self.yaw_max_deg = 30.0
+        self.pitch_max_deg = 40.0
 
     def load_image(self, source):
         if source.startswith(('http://', 'https://')):
@@ -63,23 +64,7 @@ class ProctoringAnalyzer:
                 faces.append((x, y, width, height, confidence))
         
         return len(faces), faces
-     
-    def verify_same_person(self, img_pth1, img_pth2):
-        print(img_pth1.dtype)
-        # result = DeepFace.verify(
-        #     img1_path=img_pth1,
-        #     img2_path=img_pth2,
-        #     detector_backend="retinaface", 
-        #     model_name="Facenet512"
-        # )
 
-        # is_same = result["verified"]
-        # similarity = result.get("distance")
-        is_same = 1
-        similarity = 0.56
-
-        return is_same, similarity
-    
     def detect_static_image(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
@@ -364,60 +349,6 @@ class ProctoringAnalyzer:
                 return 1
         return 0
 
-    # def generate_caption(self, faces_count, gadgets_count, phone_present, screen_present, 
-    #                     books_present, gadgets, is_live, same_person, head_pose_forward, gaze_status, head_pose_desc, 
-    #                     hand_result, yaw_angle=None, pitch_angle=None):
-    #     parts = []
-    #     violations = []
-
-    #     if faces_count == 0:
-    #         return "No person detected in the image."
-    #     elif faces_count == 1:
-    #         parts.append("One person detected")
-    #     else:
-    #         parts.append(f"{faces_count} people detected")
-
-    #     status_items = []
-        
-    #     if not is_live:
-    #         status_items.append("FAKE IMAGE DETECTED")
-        
-    #     if same_person == 0:
-    #         status_items.append("DIFFERENT PERSON")
-        
-    #     if not head_pose_forward:
-    #        status_items.append(f"Head not facing forward ({head_pose_desc})")
-    #     else:
-    #         status_items.append(f"Head pose: {head_pose_desc}")
-
-    #     if gaze_status and gaze_status.lower() != "gaze straight":
-    #         status_items.append(f"Gaze direction: {gaze_status}")
-        
-    #     if phone_present:
-    #         status_items.append("PHONE DETECTED")
-        
-    #     if screen_present:
-    #         status_items.append("SECOND SCREEN")
-        
-    #     if books_present:
-    #         status_items.append("PRINTED MATERIALS")
-        
-    #     if gadgets_count > 0 and gadgets:
-    #         status_items.append(f"GADGETS: {', '.join(gadgets[:3])}")
-
-    #     if hand_result.get("hands_holding_obj", False):
-    #         status_items.append("HANDS HOLDING OBJECT")
-    #     if hand_result.get("sus_gesture", False):
-    #         status_items.append("SUSPICIOUS HAND GESTURE")
-
-    #     if status_items:
-    #         parts.append("VIOLATIONS: " + " | ".join(status_items))
-    #     else:
-    #         if is_live and same_person == 1 and head_pose_forward:
-    #             parts.append("COMPLIANT - No violations detected")
-
-    #     return " - ".join(parts)
-
     def generate_caption(self, faces_count, gadgets_count, phone_present, screen_present, 
                         books_present, gadgets, is_live, same_person, head_pose_forward, gaze_status, 
                         head_pose_desc, hand_result, yaw_angle=None, pitch_angle=None):
@@ -466,16 +397,15 @@ class ProctoringAnalyzer:
             violations.append("Printed materials detected.")
 
         if gadgets_count > 0 and gadgets:
-            gadget_summary = ", ".join(gadgets[:3])
-            violations.append(f"Other gadgets detected: {gadget_summary}.")
+            gadget_summary = ", ".join([g for g in gadgets if g != 'phone'][:3])
+            if gadget_summary:
+                violations.append(f"Other gadgets detected: {gadget_summary}.")
 
-        # Hand gestures
         if hand_result.get("hands_holding_obj"):
             violations.append("Hands are holding an object.")
         if hand_result.get("sus_gesture"):
             violations.append("Suspicious hand gesture detected.")
 
-        # Construct final caption
         caption = "\n".join(summary_parts)
 
         if violations:
@@ -498,11 +428,47 @@ class ProctoringAnalyzer:
             normalized_ref = self.normalize_image(ref_img)
             normalized_img = self.normalize_image(img)
 
-            is_same, similarity = self.verify_same_person(normalized_ref, normalized_img)
+            is_same, similarity = verify_faces(ref_image_source,image_source)
 
             num_faces, faces = self.detect_faces_mediapipe(normalized_img)
             detections = self.detect_objects_yolo(normalized_img)
-        
+
+            violation_bboxes = []
+            for det in detections:
+                cls = det['class']
+                conf = det['confidence']
+                bbox = det['bbox']
+                if (cls in self.phone_classes and conf > 0.25) or \
+                   (cls in self.screen_classes and conf > 0.4) or \
+                   (cls in self.book_classes and conf > 0.25) or \
+                   (cls in self.gadget_classes and conf > 0.6):
+                    if hasattr(bbox, 'tolist'):
+                        bbox = bbox.tolist()
+                    violation_bboxes.append({'class': cls, 'bbox': bbox, 'confidence': conf}) 
+
+            for (x, y, w, h, conf) in faces:
+                violation_bboxes.append({'class': 'face', 'bbox': [x, y, x+w, y+h], 'confidence': conf})
+
+            results = self.face_mesh.process(cv2.cvtColor(normalized_img, cv2.COLOR_BGR2RGB))
+            if results.multi_face_landmarks:
+                landmarks = results.multi_face_landmarks[0].landmark
+                h, w = normalized_img.shape[:2]
+
+                left_eye_indices = [33, 133, 159, 145]
+                right_eye_indices = [263, 362, 386, 374]
+
+                def get_bbox(indices):
+                    points = np.array([[landmarks[i].x * w, landmarks[i].y * h] for i in indices])
+                    x1, y1 = points.min(axis=0)
+                    x2, y2 = points.max(axis=0)
+                    return [int(x1), int(y1), int(x2), int(y2)]
+
+                left_eye_bbox = get_bbox(left_eye_indices)
+                right_eye_bbox = get_bbox(right_eye_indices)
+
+                violation_bboxes.append({'class': 'left_eye', 'bbox': left_eye_bbox, 'confidence': 1.0})
+                violation_bboxes.append({'class': 'right_eye', 'bbox': right_eye_bbox, 'confidence': 1.0})
+       
             is_live = bool(1 - self.detect_static_image(normalized_img))
 
             head_pose_forward, yaw_angle, pitch_angle = self.detect_head_pose(normalized_img)
@@ -546,6 +512,7 @@ class ProctoringAnalyzer:
                 result["gadgets"] = gadget_list
             
             result["caption"] = caption
+            result['violation_bboxes'] = violation_bboxes
 
             return result
             
@@ -560,11 +527,11 @@ def main():
     while True:
         print("\n" + "="*50)
 
-        ref_input = input("Enter reference image URL/path: ").strip()
+        ref_input = str(input("Enter reference image URL/path: ").strip())
         if ref_input.lower() == 'quit':
             break
 
-        current_input = input("Enter image URL/path: ").strip()
+        current_input = str(input("Enter image URL/path: ").strip())
 
         if current_input.lower() == 'quit':
             break

@@ -9,21 +9,20 @@ class InterviewMonitor:
     def evaluate_card(self, result, current_time=None):
         current_time = current_time or datetime.now()
 
-        # Red card conditions - immediate serious violations
         if result.get("number_of_faces", 0) != 1:
-            return self.issue_card("Red", current_time, "Invalid number of people detected")
+            return self.issue_card("Red 🔴", current_time, "Invalid number of people detected")
 
-        if not result.get("same_person_as_reference", True):
-            return self.issue_card("Red", current_time, "Different person from reference")
+        if result.get("same_person_as_reference") is not True:
+            return self.issue_card("Red 🔴", current_time, "Different person from reference")
 
         if not result.get("is_live_image", True):
-            return self.issue_card("Red", current_time, "Static or fake image")
+            return self.issue_card("Red 🔴", current_time, "Static or fake image")
 
         if not result.get("face_visible", True):
-            return self.issue_card("Red", current_time, "Face not visible")
+            return self.issue_card("Red 🔴", current_time, "Face not visible")
 
         if result.get("phone_present") or result.get("second_screen_present") or result.get("printed_material_present"):
-            return self.issue_card("Red", current_time, "Prohibited object detected")
+            return self.issue_card("Red 🔴", current_time, "Prohibited object detected")
 
         # Amber card conditions - minor issues
         amber_reasons = []
@@ -41,16 +40,16 @@ class InterviewMonitor:
             amber_reasons.append("Minor gadgets visible")
 
         if amber_reasons:
-            return self.issue_card("Amber", current_time, "; ".join(amber_reasons))
+            return self.issue_card("Amber 🟡", current_time, "; ".join(amber_reasons))
 
         # Green card - ideal conditions
-        return self.issue_card("Green", current_time, "All conditions ideal")
+        return self.issue_card("Green 🟢", current_time, "All conditions ideal")
 
     def issue_card(self, card_type, current_time, reason=""):
         delta = 0
-        if card_type == "Amber":
+        if card_type == "Amber 🟡":
             delta = -20
-        elif card_type == "Red":
+        elif card_type == "Red 🔴":
             delta = -50
 
         self.score += delta

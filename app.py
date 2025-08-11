@@ -47,6 +47,7 @@ def analyze_proctoring_session(ref_img_cv, test_imgs_cv, analyzer, monitor, temp
             cv2.imwrite(test_tmp.name, test_img_cv)
 
             result = analyzer.analyze_dual(ref_tmp.name, test_tmp.name)
+            print(f"Processed frame {i+1}")
 
         os.remove(ref_tmp.name)
         os.remove(test_tmp.name)
@@ -60,10 +61,11 @@ def analyze_proctoring_session(ref_img_cv, test_imgs_cv, analyzer, monitor, temp
             "card": card['card'],
             "reason": card['reason'],
             "caption": result.get("caption", ""),
-            "violations": result.get("caption", "").split("VIOLATIONS:")[-1].strip() if "VIOLATIONS:" in result.get("caption", "") else None
+            "violations": result.get("caption", "").split("VIOLATIONS:")[-1].strip() if "VIOLATIONS:" in result.get("caption", "") else None,
+            "violation_bboxes": result.get("violation_bboxes", [])
         })
 
-        if card['card'] == "Red":
+        if card['card'] == "Red 🔴":
             break  
 
     return scores, summaries
@@ -112,24 +114,14 @@ if video_file:
         ref_frame = frames[0]
         test_frames = frames[1:]
 
-        st.image(cv2.cvtColor(ref_frame, cv2.COLOR_BGR2RGB), caption="Reference Frame (First Frame)")
+        st.image(cv2.cvtColor(ref_frame, cv2.COLOR_BGR2RGB), caption="Reference Frame")
 
         scores, summaries = analyze_proctoring_session(ref_frame, test_frames, analyzer, monitor, temp_dir=custom_temp_dir)
 
-        # for summary in summaries:
-        #     st.markdown(f"### Frame {summary['index']+1}")
-        #     st.write(f"Score: {summary['score']}, Card: {summary['card']}")
-        #     st.write(summary["caption"])
-        #     if summary["violations"]:
-        #         st.warning(summary["violations"])
-        #     st.markdown("---")
-
-        #     if summary['card'] == "Red":
-        #         st.error("🚫 Interview Terminated due to critical violations.")
-        #         break
+        all_violations = {}
 
         for summary in summaries:
-            col_detail, col_frame = st.columns([1, 1])  # equal width columns
+            col_detail, col_frame = st.columns([1, 1]) 
 
             with col_detail:
                 st.markdown(f"### Frame {summary['index']+1} Details")
@@ -139,35 +131,62 @@ if video_file:
                 st.write(summary["caption"])
                 if summary["violations"]:
                     st.warning(summary["violations"])
+                    all_violations[f"Frame {summary['index']+1}"] = summary["violations"]
 
             with col_frame:
-                frame_img_rgb = cv2.cvtColor(frames[summary['index']+1], cv2.COLOR_BGR2RGB)
-                st.image(frame_img_rgb, caption=f"Frame {summary['index']+1}", use_container_width=True)
+                frame_img = frames[summary['index']+1].copy()  
+
+                violation_bboxes = summary.get("violation_bboxes", [])
+
+                card_color = summary['card'][0].lower()
+                color_map = {'g': (137, 180, 62), 'a': (0, 191, 255), 'r': (60, 20, 220)}
+                bbox_color = color_map.get(card_color, (255, 255, 255))
+
+                for item in violation_bboxes:
+                    bbox = item.get("bbox", [])
+                    if len(bbox) == 4:
+                        x1, y1, x2, y2 = map(int, bbox)
+                        cv2.rectangle(frame_img, (x1, y1), (x2, y2), bbox_color, 2)
+                        cls_name = item.get("class", "object")
+                        (text_w, text_h), _ = cv2.getTextSize(cls_name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                        cv2.putText(frame_img, cls_name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.6, bbox_color, 2)
+                    else:
+                        print(f"Invalid bbox format: {bbox}")
+
+                frame_img_rgb = cv2.cvtColor(frame_img, cv2.COLOR_BGR2RGB)
+                st.image(frame_img_rgb, caption=f"Frame {summary['index']+1} with Violations", use_container_width=True)
+
 
             st.markdown("---")
 
-
         final_score = scores[-1] if scores else 100
-        final_card = "Green"
-        if any(s['card'] == "Red" for s in summaries):
-            final_card = "Red"
-        elif any(s['card'] == "Amber" for s in summaries):
-            final_card = "Amber"
+        final_card = "Green 🟢"
+        if any(s['card'] == "Red 🔴" for s in summaries):
+            final_card = "Red 🔴"
+        elif any(s['card'] == "Amber 🟡" for s in summaries):
+            final_card = "Amber 🟡"
 
         st.markdown("## Video Summary")
         st.write(f"Final Score: {final_score:.1f}")
-        st.write(f"Final Card: {final_card}")
+        st.write(f"Final Card: {final_card} ")
+        if all_violations:
+            st.markdown("### Final Violations Summary")
+            for v in all_violations:
+                st.write(v)
+        else:
+            st.write("No violations detected in any frame.")
 
-        if final_score <= 40 or final_card == "Red":
+        if final_score <= 40 or final_card == "Red 🔴":
             st.error("🚫 Interview Terminated due to critical violations in video.")
-        elif final_card == "Amber":
+        elif final_card == "Amber 🟡":
             st.warning("⚠️ Minor issues detected during video. Continue monitoring.")
         else:
             st.success("✅ Interview conditions ideal throughout the video.")
 
     os.remove(video_path)
 
-elif ref_img_file and test_img_file:
+elif test_img_file:
     ref_img_cv = load_image_upload(ref_img_file)
     test_img_cv = load_image_upload(test_img_file)
 
@@ -183,9 +202,9 @@ elif ref_img_file and test_img_file:
     else:
         st.success(summary["caption"])
 
-    if summary["card"] == "Red" or summary["score"] <= 40:
+    if summary["card"] == "Red 🔴" or summary["score"] <= 40:
         st.error("🚫 Interview Terminated due to critical violations.")
-    elif summary["card"] == "Amber":
+    elif summary["card"] == "Amber 🟡":
         st.warning("⚠️ Minor issues detected. Continue monitoring.")
     else:
         st.success("✅ Interview conditions ideal. No violations detected.")
