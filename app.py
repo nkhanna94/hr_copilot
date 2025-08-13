@@ -61,7 +61,7 @@ def analyze_proctoring_session(ref_img_cv, test_imgs_cv, analyzer, monitor, temp
             "card": card['card'],
             "reason": card['reason'],
             "caption": result.get("caption", ""),
-            "violations": result.get("caption", "").split("VIOLATIONS:")[-1].strip() if "VIOLATIONS:" in result.get("caption", "") else None,
+            "violations": result.get("caption", "").split("Violations:")[-1].strip() if "Violations:" in result.get("caption", "") else None,
             "violation_bboxes": result.get("violation_bboxes", [])
         })
 
@@ -106,6 +106,7 @@ if video_file:
         video_path = tmp_vid.name
 
     frames = extract_frames(video_path, interval_sec=1)
+    all_violations = {}
 
     if not frames:
         st.error("Failed to extract frames from video.")
@@ -117,8 +118,6 @@ if video_file:
         st.image(cv2.cvtColor(ref_frame, cv2.COLOR_BGR2RGB), caption="Reference Frame")
 
         scores, summaries = analyze_proctoring_session(ref_frame, test_frames, analyzer, monitor, temp_dir=custom_temp_dir)
-
-        all_violations = {}
 
         for summary in summaries:
             col_detail, col_frame = st.columns([1, 1]) 
@@ -170,10 +169,11 @@ if video_file:
         st.markdown("## Video Summary")
         st.write(f"Final Score: {final_score:.1f}")
         st.write(f"Final Card: {final_card} ")
+        print(all_violations)
         if all_violations:
             st.markdown("### Final Violations Summary")
-            for v in all_violations:
-                st.write(v)
+            for frame, violation in all_violations.items():
+                st.write(f"**{frame}:** {violation}")
         else:
             st.write("No violations detected in any frame.")
 
