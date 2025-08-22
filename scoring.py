@@ -15,9 +15,6 @@ class InterviewMonitor:
         if result.get("same_person_as_reference") is not True:
             return self.issue_card("Red 🔴", current_time, "Different person from reference")
 
-        if not result.get("is_live_image", True):
-            return self.issue_card("Red 🔴", current_time, "Static or fake image")
-
         if not result.get("face_visible", True):
             return self.issue_card("Red 🔴", current_time, "Face not visible")
 

@@ -9,3 +9,6 @@ torchvision==0.22.1
 protobuf==4.25.8
 streamlit==1.47.1
 deepface==0.0.93
+tf_keras==2.19.0
+openai==0.28
+python-dotenv

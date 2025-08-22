@@ -7,7 +7,6 @@ import json
 import mediapipe as mp
 from ultralytics import YOLO
 import math
-from typing import Optional, Dict, Tuple, List
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -23,13 +22,16 @@ class ProctoringAnalyzer:
         self.face_mesh = mp_face_mesh.FaceMesh(
             static_image_mode=True, max_num_faces=1, refine_landmarks=True)
         
+        self.mp_hands = mp.solutions.hands
+        self.hands_detector = self.mp_hands.Hands(static_image_mode=True, max_num_hands=2)
+        
         self.gadget_classes = ['laptop', 'tv', 'mouse', 'keyboard', 'remote', 'tablet', 'smartwatch']
         self.phone_classes = ['cell phone']
         self.screen_classes = ['tv', 'laptop', 'monitor']
         self.book_classes = ['book', 'notebook', 'binder', 'folder', 'paper']
         
         self.cosine_threshold = 0.4
-        self.gaze_tolerance = 0.15
+        self.gaze_tolerance = 0.24
         self.yaw_max_deg = 30.0
         self.pitch_max_deg = 40.0
 
@@ -65,27 +67,7 @@ class ProctoringAnalyzer:
         
         return len(faces), faces
 
-    def detect_static_image(self, img):
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        
-        edges = cv2.Canny(gray, 50, 150)
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area > 100000:
-                x, y, w, h = cv2.boundingRect(contour)
-                aspect_ratio = w / h
-                if 1.2 < aspect_ratio < 2.2:
-                    roi = gray[y:y+h, x:x+w]
-                    brightness_std = np.std(roi)
-                    if brightness_std < 30:
-                        return 1
-        
-        return 1 if laplacian_var < 80 else 0
-
-    def interpret_gaze(self, left_offset, right_offset, tolerance=0.15):
+    def interpret_gaze(self, left_offset, right_offset, tolerance=0.24):
         directions = []
         if left_offset[0] > tolerance and right_offset[0] > tolerance:
             directions.append("left")
@@ -235,46 +217,62 @@ class ProctoringAnalyzer:
         return looking_forward, round(yaw, 2), round(pitch, 2)
     
     def detect_hands_and_gestures(self, img, detections):
-    
-        mp_hands = mp.solutions.hands
-        hands = mp_hands.Hands(static_image_mode=True, max_num_hands=2)
         rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        results = hands.process(rgb_img)
+        results = self.hands_detector.process(rgb_img)
 
-        sus_gesture = False
-        hands_holding_obj = False
         hand_landmarks_list = results.multi_hand_landmarks if results.multi_hand_landmarks else []
-        hand_bboxes = []
         h, w, _ = img.shape
+        hand_bboxes = []
+        gestures = []
+        hands_holding_obj = False
 
-        for hand_landmarks in hand_landmarks_list:
+        def get_hand_bbox(hand_landmarks):
             xs = [lm.x * w for lm in hand_landmarks.landmark]
             ys = [lm.y * h for lm in hand_landmarks.landmark]
-            x_min, x_max = min(xs), max(xs)
-            y_min, y_max = min(ys), max(ys)
-            hand_bboxes.append((x_min, y_min, x_max, y_max))
+            return [min(xs), min(ys), max(xs), max(ys)]
 
-        def is_hand_holding(hand_landmarks):
-            
-            tip_ids = [4, 8, 12, 16, 20]    # thumb, index, middle, ring, pinky tips
-            mcp_ids = [2, 5, 9, 13, 17]     # thumb, index, middle, ring, pinky MCP/base
+        def classify_gesture(hand_landmarks):
+            tip_ids = [4, 8, 12, 16, 20]
+            mcp_ids = [2, 5, 9, 13, 17]
             closed_fingers = 0
             for tip, mcp in zip(tip_ids, mcp_ids):
                 tip_lm = hand_landmarks.landmark[tip]
                 mcp_lm = hand_landmarks.landmark[mcp]
                 dist = ((tip_lm.x - mcp_lm.x) ** 2 + (tip_lm.y - mcp_lm.y) ** 2) ** 0.5
-                if dist < 0.07:   # threshold
+                if dist < 0.07:
                     closed_fingers += 1
-            return closed_fingers >= 3  # most fingers closed = holding 
+            if closed_fingers >= 3:
+                return "holding"
+            elif closed_fingers == 0:
+                return "open"
+            else:
+                return "unknown"
+
+        def bbox_overlap(boxA, boxB):
+            xA = max(boxA[0], boxB[0])
+            yA = max(boxA[1], boxB[1])
+            xB = min(boxA[2], boxB[2])
+            yB = min(boxA[3], boxB[3])
+            return (xA < xB) and (yA < yB)
 
         for hand_landmarks in hand_landmarks_list:
-            if is_hand_holding(hand_landmarks):
-                hands_holding_obj = True
+            hand_bbox = get_hand_bbox(hand_landmarks)
+            gesture = classify_gesture(hand_landmarks)
+            gestures.append(gesture)
+            hand_bboxes.append(hand_bbox)
+
+            for det in detections:
+                obj_bbox = det['bbox']
+                if bbox_overlap(hand_bbox, obj_bbox):
+                    hands_holding_obj = True
+
+        sus_gesture = any(g == "unknown" for g in gestures)
 
         return {
             'num_hands': len(hand_landmarks_list),
             'hands_holding_obj': hands_holding_obj,
-            'sus_gesture': sus_gesture
+            'sus_gesture': sus_gesture,
+            'gestures': gestures
         }
 
     def detect_objects_yolo(self, img):
@@ -294,24 +292,43 @@ class ProctoringAnalyzer:
         
         return detections
 
-    def analyze_face_quality(self, img, faces):
+    def analyze_face_quality(self, img, faces, detections=None):
         if len(faces) == 0:
-            return 0, 0
+            return 0, 0  # No faces detected
+
+        h_img, w_img = img.shape[:2]
 
         for x, y, w, h, confidence in faces:
+            # Ignore very small faces
             if w < 60 or h < 60:
                 continue
 
+            # Check if face is fully inside image boundaries with a margin
+            margin = 10
+            if x < margin or y < margin or (x + w) > (w_img - margin) or (y + h) > (h_img - margin):
+                return 1, 0  # Face not fully visible
+
+            # Crop face ROI and convert color space for face mesh processing
             face_roi = img[y:y+h, x:x+w]
-            gray_face = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
-        
-            brightness = np.mean(gray_face)
-            contrast = np.std(gray_face)
-            laplacian_var = cv2.Laplacian(gray_face, cv2.CV_64F).var()
+            rgb_face = cv2.cvtColor(face_roi, cv2.COLOR_BGR2RGB)
+            results = self.face_mesh.process(rgb_face)
 
-            if confidence > 0.5 and brightness >= 40 and contrast >= 10 and laplacian_var >= 40:
-                return 1, 1
+            # If no landmarks detected, face is probably obscured or bad quality
+            if not results.multi_face_landmarks:
+                return 1, 0
 
+            # Check key landmarks presence (eyes, nose, mouth)
+            landmarks = results.multi_face_landmarks[0].landmark
+            key_indices = [33, 133, 362, 263, 1, 2, 13, 14]  # eyes, nose, mouth
+            try:
+                key_points = [(landmarks[i].x, landmarks[i].y) for i in key_indices]
+            except Exception:
+                return 1, 0
+
+            # If we get here, face is fully visible and landmarks are detected
+            return 1, 1
+
+        # If no valid faces found after filtering, return low quality
         return 1, 0
 
     def count_gadgets(self, detections):
@@ -350,7 +367,7 @@ class ProctoringAnalyzer:
         return 0
 
     def generate_caption(self, faces_count, gadgets_count, phone_present, screen_present, 
-                        books_present, gadgets, is_live, same_person, head_pose_forward, gaze_status, 
+                        books_present, gadgets, same_person, head_pose_forward, gaze_status, 
                         head_pose_desc, hand_result, yaw_angle=None, pitch_angle=None):
 
         summary_parts = []
@@ -358,23 +375,17 @@ class ProctoringAnalyzer:
 
         # Face count
         if faces_count == 0:
-            return "No person detected in the image."
+            return "No person detected in the image.", "No person detected in the image."
         elif faces_count == 1:
             summary_parts.append("One person detected.")
         else:
-            summary_parts.append(f"{faces_count} people detected.")
+            violations.append(f"{faces_count} people detected.")
 
         # Identity match
         if same_person:
             summary_parts.append("Person matches the reference image.")
         else:
             violations.append("Person does not match the reference image.")
-
-        # Liveness check
-        if is_live:
-            summary_parts.append("Live image detected.")
-        else:
-            violations.append("Static or fake image detected.")
 
         # Head pose
         if head_pose_forward:
@@ -406,14 +417,15 @@ class ProctoringAnalyzer:
         if hand_result.get("sus_gesture"):
             violations.append("Suspicious hand gesture detected.")
 
-        caption = "\n".join(summary_parts)
+        summary_text = "\n".join(summary_parts)
+        print("Violations list:", violations)
 
         if violations:
-            caption += "\n\nViolations:\n- " + "\n- ".join(violations)
+            violations = "- " + "\n- ".join(violations)
         else:
-            caption += "\n\nCompliant - No violations detected."
-
-        return caption
+            violations = ""
+    
+        return summary_text, violations
 
     def analyze_dual(self, ref_image_source, image_source):
         try:
@@ -468,8 +480,6 @@ class ProctoringAnalyzer:
 
                 violation_bboxes.append({'class': 'left_eye', 'bbox': left_eye_bbox, 'confidence': 1.0})
                 violation_bboxes.append({'class': 'right_eye', 'bbox': right_eye_bbox, 'confidence': 1.0})
-       
-            is_live = bool(1 - self.detect_static_image(normalized_img))
 
             head_pose_forward, yaw_angle, pitch_angle = self.detect_head_pose(normalized_img)
             
@@ -478,13 +488,13 @@ class ProctoringAnalyzer:
             
             gadget_count, phone_present, second_screen_present, gadget_list = self.count_gadgets(detections)
             printed_material_present = self.detect_printed_materials(detections)
-            face_visible, face_properly_visible = self.analyze_face_quality(normalized_img, faces)
+            face_visible, face_properly_visible = self.analyze_face_quality(normalized_img, faces, detections)
 
             hand_result = self.detect_hands_and_gestures(img, detections)
             
-            caption = self.generate_caption(
+            summary_text, violations = self.generate_caption(
                     num_faces, gadget_count, phone_present, second_screen_present, 
-                    printed_material_present, gadget_list, is_live, is_same, head_pose_forward,
+                    printed_material_present, gadget_list, is_same, head_pose_forward,
                     gaze_status, head_pose_desc, hand_result, yaw_angle, pitch_angle
             )
        
@@ -496,7 +506,6 @@ class ProctoringAnalyzer:
                 "printed_material_present": printed_material_present,
                 "face_visible": face_visible,
                 "face_properly_visible": face_properly_visible,
-                "is_live_image": is_live,
                 "same_person_as_reference": is_same,
                 "head_pose_forward" : head_pose_forward,
                 "gaze_status": gaze_status,
@@ -511,7 +520,8 @@ class ProctoringAnalyzer:
             if gadget_count >= 1:
                 result["gadgets"] = gadget_list
             
-            result["caption"] = caption
+            result["caption"] = summary_text
+            result["violations"] = violations
             result['violation_bboxes'] = violation_bboxes
 
             return result
