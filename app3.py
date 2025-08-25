@@ -142,6 +142,22 @@ Example 2 – Violation: Multiple People
     except Exception as e:
         print("Vision LLM summary error:", e)
         return "- Unable to generate vision-based summary"
+    
+def choose_best_summary(text_llm_summary, vision_llm_summary):
+    vague_indicators = ["unable", "error", "none", "no info", "not sure", "unclear", "unknown"]
+
+    def is_vague(text):
+        text = text.lower().strip()
+        if len(text) < 15:
+            return True
+        return any(word in text for word in vague_indicators)
+
+    # If vision summary is vague, prefer text summary
+    if is_vague(vision_llm_summary):
+        return text_llm_summary
+
+    # If both are valid, return the shorter one
+    return text_llm_summary if len(text_llm_summary) <= len(vision_llm_summary) else vision_llm_summary
 
 def analyze_proctoring_session(ref_img_cv, test_imgs_cv, analyzer, monitor, temp_dir="custom_temp"):
     os.makedirs(temp_dir, exist_ok=True)
@@ -159,13 +175,13 @@ def analyze_proctoring_session(ref_img_cv, test_imgs_cv, analyzer, monitor, temp
 
             llm_caption = generate_llm_bullet_summary(result, card)
             vision_llm_caption = generate_vision_llm_summary(ref_img_cv, test_img_cv)
+            best_caption = choose_best_summary(llm_caption, vision_llm_caption)
 
             summaries.append({
                 "index": i,
                 "score": card['current_score'],
                 "card": card['card'],
-                "caption_by_llm": llm_caption,
-                "caption_by_vision_llm": vision_llm_caption,
+                "caption": best_caption,
                 "violations": result.get("violations", ""),
                 "violation_bboxes": result.get("violation_bboxes", [])
             })
@@ -230,8 +246,7 @@ if video_file:
 
             with col_detail:
                 st.markdown(f"### Frame {summary['index']+1}")
-                st.markdown("**Text-based LLM Summary:**")
-                st.markdown(summary['caption_by_llm'])
+                st.markdown(summary['caption'])
 
                 if summary["card"] == "Red 🔴":
                     st.error("Red Card 🚫")
@@ -239,9 +254,6 @@ if video_file:
                     st.warning("Amber Card ⚠️")
                 else:
                     st.success("Green Card ✅")
-
-                st.markdown("**Vision-enabled LLM Summary:**")
-                st.markdown(summary['caption_by_vision_llm'])
 
             with col_frame:
                 frame_img = frames[summary['index']+1].copy()
@@ -299,8 +311,7 @@ elif test_img_file:
     summary = summaries[0]
 
     st.markdown("## Proctoring Result")
-    st.markdown(f"LLM Summary:- {summary['caption_by_llm']}")
-    st.markdown(f"Vision LLM Summary:- {summary['caption_by_vision_llm']}")
+    st.markdown(summary['caption'])
 
     if summary["card"] == "Red 🔴":
         st.error("🚫 Interview Terminated due to critical violations.")
