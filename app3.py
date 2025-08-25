@@ -78,27 +78,52 @@ Bullet Summary:
         print("LLM summary error:", e)
         return "- Unable to generate summary"
     
-def generate_vision_llm_summary(frame_img_cv):
+def generate_vision_llm_summary(ref_img_cv, eval_img_cv):
+    def encode_image(img_cv):
+        img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(img_rgb).resize((120, 160))
+        buffered = io.BytesIO()
+        pil_img.save(buffered, format="PNG", quality=10)
+        img_bytes = buffered.getvalue()
+        img_b64 = base64.b64encode(img_bytes).decode()
+        return img_b64
 
-    img_rgb = cv2.cvtColor(frame_img_cv, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(img_rgb)
-    
-    buffered = io.BytesIO()
-    pil_img.save(buffered, format="PNG")
-    img_bytes = buffered.getvalue()
-    
-    img_b64 = base64.b64encode(img_bytes).decode()
+    ref_img_b64 = encode_image(ref_img_cv)
+    eval_img_b64 = encode_image(eval_img_cv)
 
     prompt = """
-You are an expert AI proctoring assistant reviewing a candidate's interview video frame for remote proctoring compliance. Carefully analyze the image and provide a concise summary (2-3 bullet points) covering:
+You are an expert AI proctoring assistant reviewing a candidate’s interview video frames for compliance.
 
-- Whether the candidate is clearly visible and focused
-- Any suspicious behaviors (e.g., multiple people, unusual objects, cheating attempts)
-- Issues that could affect interview validity (e.g., poor lighting, face obstruction)
-- Conclude if the frame shows compliance or violation, and briefly explain why.
+You will be given two images:
 
-Keep the summary objective, clear, and professional.
+1. Reference Image – a baseline image of the candidate.
+2. Evaluation Image – a frame to analyze for compliance.
 
+Carefully compare and analyze these images. Provide a **very concise** summary (2–3 short bullet points) covering:
+
+Candidate visibility & focus – Is the candidate’s face clearly visible, properly aligned, and consistent with the reference image?
+Suspicious behaviors/objects – Are there multiple people, unusual objects (phones, books, papers, extra screens), or potential cheating attempts?
+Environmental issues – Poor lighting, face obstruction, background distractions, or anything affecting fairness.
+Compliance conclusion – State clearly if the frame is *Compliant* or *Violation*, with a one-line reason.
+
+Keep the tone objective, factual, and concise. Do not speculate beyond the visual evidence. 
+Use short phrases or sentence fragments. Avoid full sentences or detailed explanations.
+
+Example Outputs
+
+Example 1 – Compliant Frame
+
+* Candidate’s face is fully visible and matches the reference image.
+* No additional people or suspicious objects detected.
+* Lighting is sufficient, no obstructions.
+* Conclusion: Compliant – Frame shows candidate clearly and meets interview conditions.
+
+Example 2 – Violation: Multiple People
+
+* Candidate’s face is visible, but another person appears in the background.
+* Presence of unauthorized individual suggests possible interference.
+* Environment otherwise acceptable.
+* Conclusion: Violation – Multiple people detected, invalid frame.
 """
 
     try:
@@ -107,7 +132,8 @@ Keep the summary objective, clear, and professional.
             messages=[
                 {"role": "system", "content": "You are a helpful AI assistant for proctoring analysis."},
                 {"role": "user", "content": prompt},
-                {"role": "user", "content": f"<image>{img_b64}</image>"}  
+                {"role": "user", "content": f"<image>{ref_img_b64}</image>"},
+                {"role": "user", "content": f"<image>{eval_img_b64}</image>"}
             ],
             temperature=1.0,
             max_completion_tokens=300
@@ -116,7 +142,6 @@ Keep the summary objective, clear, and professional.
     except Exception as e:
         print("Vision LLM summary error:", e)
         return "- Unable to generate vision-based summary"
-
 
 def analyze_proctoring_session(ref_img_cv, test_imgs_cv, analyzer, monitor, temp_dir="custom_temp"):
     os.makedirs(temp_dir, exist_ok=True)
@@ -133,7 +158,7 @@ def analyze_proctoring_session(ref_img_cv, test_imgs_cv, analyzer, monitor, temp
             card = monitor.evaluate_card(result)
 
             llm_caption = generate_llm_bullet_summary(result, card)
-            vision_llm_caption = generate_vision_llm_summary(test_img_cv)
+            vision_llm_caption = generate_vision_llm_summary(ref_img_cv, test_img_cv)
 
             summaries.append({
                 "index": i,
@@ -208,15 +233,15 @@ if video_file:
                 st.markdown("**Text-based LLM Summary:**")
                 st.markdown(summary['caption_by_llm'])
 
-                st.markdown("**Vision-enabled LLM Summary:**")
-                st.markdown(summary['caption_by_vision_llm'])
-
                 if summary["card"] == "Red 🔴":
                     st.error("Red Card 🚫")
                 elif summary["card"] == "Amber 🟡":
                     st.warning("Amber Card ⚠️")
                 else:
                     st.success("Green Card ✅")
+
+                st.markdown("**Vision-enabled LLM Summary:**")
+                st.markdown(summary['caption_by_vision_llm'])
 
             with col_frame:
                 frame_img = frames[summary['index']+1].copy()
@@ -274,7 +299,8 @@ elif test_img_file:
     summary = summaries[0]
 
     st.markdown("## Proctoring Result")
-    st.markdown(summary['caption_by_llm'])
+    st.markdown(f"LLM Summary:- {summary['caption_by_llm']}")
+    st.markdown(f"Vision LLM Summary:- {summary['caption_by_vision_llm']}")
 
     if summary["card"] == "Red 🔴":
         st.error("🚫 Interview Terminated due to critical violations.")
