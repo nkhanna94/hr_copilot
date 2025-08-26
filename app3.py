@@ -8,6 +8,9 @@ import tempfile
 import os
 import openai
 from dotenv import load_dotenv
+from pydantic import BaseModel
+from typing import List
+from langchain.output_parsers import PydanticOutputParser
 
 from detect import ProctoringAnalyzer
 from scoring import InterviewMonitor
@@ -45,22 +48,40 @@ def extract_frames(video_path, interval_sec=1):
     cap.release()
     return frames
 
+class ProctoringSummary(BaseModel):
+    status: str
+    reason: str
+
+parser = PydanticOutputParser(pydantic_object=ProctoringSummary)
+
 def generate_llm_bullet_summary(result, card):
     prompt = f"""
-You are a professional AI assistant evaluating remote proctoring violations. Summarize the situation in under 3 concise bullet points.
+You are a professional AI assistant evaluating remote proctoring violations.
 
-Include:
-- Compliance or violation status
-- Nature of violation (if any)
-- Keep wording short, objective, and clear
+Summarize the situation in structured JSON format with the following fields:
 
+{parser.get_format_instructions()}
+
+Use the following mapping rules for the "status" field:
+- If card is "Green 🟢" → status = "Compliant"
+- If card is "Amber 🟡" → status = "Minor Violation"
+- If card is "Red 🔴" → status = "Major Violation"
+
+The "reason" should be a short, objective phrase describing the issue, like:
+- "Gaze not aligned"
+- "Phone detected"
+- "Multiple faces"
+- "Face partially obstructed"
+- Or "No unusual activity" for compliant cases
+
+Do not include any extra observations or explanations.
+
+Input Data:
 Violations: {result.get("violations", "None")}
 Score: {card["current_score"]}
 Card: {card["card"]}
 Reason: {card["reason"]}
 Bounding boxes: {result.get("violation_bboxes", [])}
-
-Bullet Summary:
 """
 
     try:
@@ -70,13 +91,17 @@ Bullet Summary:
                 {"role": "system", "content": "You are a helpful AI assistant for proctoring analysis."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=1.0,
-            max_completion_tokens=300
+            temperature=0.0, 
+            max_tokens=300
         )
-        return response.choices[0].message["content"].strip()
+        raw_output = response.choices[0].message["content"].strip()
+        summary = parser.parse(raw_output)
+
+        return f"- Status: {summary.status}\n- Reason: {summary.reason}"
+
     except Exception as e:
-        print("LLM summary error:", e)
-        return "- Unable to generate summary"
+        print("LLM summary or parsing error:", e)
+        return "- Unable to generate or parse summary"
     
 def generate_vision_llm_summary(ref_img_cv, eval_img_cv):
     def encode_image(img_cv):
@@ -107,7 +132,6 @@ Environmental issues – Poor lighting, face obstruction, background distraction
 Compliance conclusion – State clearly if the frame is *Compliant* or *Violation*, with a one-line reason.
 
 Keep the tone objective, factual, and concise. Do not speculate beyond the visual evidence. 
-Use short phrases or sentence fragments. Avoid full sentences or detailed explanations.
 
 Example Outputs
 
