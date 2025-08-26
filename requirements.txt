@@ -11,4 +11,6 @@ streamlit==1.47.1
 deepface==0.0.93
 tf_keras==2.19.0
 openai==0.28
-python-dotenv
+python-dotenv==1.1.1
+langchain==0.3.27
+pydantic==2.11.7
