@@ -220,8 +220,8 @@ def analyze_proctoring_session(ref_img_cv, test_imgs_cv, analyzer, monitor, temp
     return scores, summaries
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="Proctoring Analyzer", layout="wide")
-st.title("Proctoring Analyzer")
+st.set_page_config(page_title="InsightfulProctor", layout="wide")
+st.title("InsightfulProctor")
 st.write("Upload a reference image and test image or a video for automated proctoring evaluation.")
 
 if "analyzer" not in st.session_state:
